@@ -1,27 +1,13 @@
 (ns promesa.core-tests
   (:require #?(:cljs [cljs.test :as t]
                :clj [clojure.test :as t])
-            [cats.core :as m]
-            [promesa.monad :as pm]
-            [promesa.core :as p :include-macros true]))
+            #?(:clj [promesa.async :refer [async]]
+               :cljs [promesa.async-cljs :refer-macros [async]])
+            #?(:cljs [promesa.issue-36 :refer [async-let-issue-36]])
+            [promesa.test-helpers :refer [future-ok future-fail]]
+            [promesa.core :as p]))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Helpers
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defn future-ok
-  [sleep value]
-  (p/promise (fn [resolve reject]
-               (p/schedule sleep #(resolve value)))))
-
-(defn future-fail
-  [sleep value]
-  (p/promise (fn [_ reject]
-               (p/schedule sleep #(reject value)))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Core Interface Tests
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; --- Core Interface Tests
 
 (t/deftest print-promise
   (t/is (string? (pr-str (p/promise nil)))))
@@ -56,23 +42,31 @@
   #?(:cljs
      (t/async done
        (let [p1 (p/promise (fn [resolve reject]
-                             (p/schedule 100 #(resolve 1))))]
+                             (p/schedule 50 #(resolve 1))))]
          (t/is (p/pending? p1))
          (p/then p1 (fn [v]
                       (t/is (= v 1))
                       (done)))))
      :clj
      (let [p1 (p/promise (fn [resolve reject]
-                           (p/schedule 100 #(resolve 1))))]
+                           (p/schedule 50 #(resolve 1))))]
        (t/is (p/pending? p1))
        (t/is (= @p1 1)))))
 
 (t/deftest promise-from-exception
-  (let [e (ex-info "foo" {})
-        p1 (p/promise e)]
-    (t/is (p/rejected? p1))
-    (p/catch p1 (fn [x]
-                  (t/is (= x e))))))
+  #?(:clj
+     (let [e (ex-info "foo" {})
+           p1 (p/promise e)]
+       (t/is (p/rejected? p1))
+       (t/is (= e @@(p/catch p1 (fn [x] (reduced x))))))
+     :cljs
+     (t/async done
+     (let [e (ex-info "foo" {})
+           p1 (p/promise e)]
+       (t/is (p/rejected? p1))
+       (p/catch p1 (fn [x]
+                     (t/is (= e x))
+                     (done)))))))
 
 (t/deftest promise-rejected
   (let [e1 (ex-info "foobar" {})
@@ -103,12 +97,12 @@
 (t/deftest arbitrary-choice-with-any
   #?(:cljs
      (t/async done
-       (let [p1 (p/any [(p/delay 300 1) (p/delay 200 2)])]
+       (let [p1 (p/any [(p/delay 300 1) (p/delay 100 2)])]
          (p/then p1 (fn [v]
                       (t/is (= v 2))
                       (done)))))
      :clj
-     (let [p1 (p/any [(p/delay 300 1) (p/delay 200 2)])]
+     (let [p1 (p/any [(p/delay 300 1) (p/delay 100 2)])]
        (t/is (= @p1 2)))))
 
 (t/deftest reject-promise-in-chain
@@ -133,37 +127,48 @@
 (t/deftest chaining-using-then
   #?(:cljs
      (t/async done
-       (let [p1 (future-ok 200 2)
+       (let [p1 (future-ok 100 2)
              p2 (p/then p1 inc)
              p3 (p/then p2 inc)]
          (p/then p3 (fn [v]
                       (t/is (= v 4))
                       (done)))))
      :clj
-     (let [p1 (future-ok 200 2)
+     (let [p1 (future-ok 100 2)
            p2 (p/then p1 inc)
            p3 (p/then p2 inc)]
-       (t/is @p3 4))))
+       (t/is (= @p3 4)))))
+
+(t/deftest then-promise
+  (let [p (-> (p/resolved 5)
+              (p/then (comp p/resolved inc))
+              (p/then (comp p/resolved inc)))]
+    #?(:clj (t/is (= @p 7))
+       :cljs
+       (t/async done
+         (p/then p (fn [v]
+                     (t/is (= v 7))
+                     (done)))))))
 
 (t/deftest chaining-using-map
   #?(:cljs
      (t/async done
-       (let [p1 (future-ok 200 2)
+       (let [p1 (future-ok 100 2)
              p2 (p/map inc p1)
              p3 (p/map inc p2)]
          (p/then p3 (fn [v]
                       (t/is (= v 4))
                       (done)))))
      :clj
-     (let [p1 (future-ok 200 2)
+     (let [p1 (future-ok 100 2)
            p2 (p/map inc p1)
            p3 (p/map inc p2)]
-       (t/is @p3 4))))
+       (t/is (= @p3 4)))))
 
 (t/deftest chaining-using-mapcat
   #?(:cljs
      (t/async done
-       (let [p1 (future-ok 200 2)
+       (let [p1 (future-ok 100 2)
              inc #(p/resolved (inc %))
              p2 (p/mapcat inc p1)
              p3 (p/mapcat inc p2)]
@@ -171,20 +176,20 @@
                       (t/is (= v 4))
                       (done)))))
      :clj
-     (let [p1 (future-ok 200 2)
+     (let [p1 (future-ok 100 2)
            inc #(p/resolved (inc %))
            p2 (p/mapcat inc p1)
            p3 (p/mapcat inc p2)]
-       (t/is @p3 4))))
+       (t/is (= @p3 4)))))
 
-(t/deftest canclel-scheduled-task
+(t/deftest cancel-scheduled-task
   #?(:cljs
      (t/async done
        (let [value (volatile! nil)
-             c1 (p/schedule 1000 #(vreset! value 1))
-             c2 (p/schedule 1000 #(vreset! value 2))]
+             c1 (p/schedule 100 #(vreset! value 1))
+             c2 (p/schedule 100 #(vreset! value 2))]
          (p/cancel! c1)
-         (p/schedule 1200
+         (p/schedule 300
                      (fn []
                        (t/is (= @value 2))
                        (t/is (realized? c2))
@@ -193,10 +198,10 @@
                        (done)))))
      :clj
      (let [value (volatile! nil)
-           c1 (p/schedule 1000 #(vreset! value 1))
-           c2 (p/schedule 1000 #(vreset! value 2))]
+           c1 (p/schedule 500 #(vreset! value 1))
+           c2 (p/schedule 500 #(vreset! value 2))]
        (p/cancel! c1)
-       @(p/schedule 1200 (constantly nil))
+       @(p/schedule 1100 (constantly nil))
        (t/is (realized? c2))
        (t/is (not (realized? c1)))
        (t/is (p/cancelled? c1))
@@ -205,26 +210,26 @@
 (t/deftest chaining-using-chain
   #?(:cljs
      (t/async done
-       (let [p1 (future-ok 200 2)
+       (let [p1 (future-ok 100 2)
              p2 (p/chain p1 inc inc inc)]
          (p/then p2 (fn [v]
                       (t/is (= v 5))
                       (done)))))
      :clj
-     (let [p1 (future-ok 200 2)
+     (let [p1 (future-ok 100 2)
            p2 (p/chain p1 inc inc inc)]
        (t/is (= @p2 5)))))
 
 (t/deftest branching-using-branch-1
   #?(:cljs
      (t/async done
-       (let [p1 (future-ok 200 2)
+       (let [p1 (future-ok 100 2)
              p2 (p/branch p1 #(inc %) (constantly nil))]
          (p/then p2 #(do
                        (t/is (= % 3))
                        (done)))))
      :clj
-     (let [p1 (future-ok 200 2)
+     (let [p1 (future-ok 100 2)
            p2 (p/branch p1 #(inc %) (constantly nil))]
        (t/is (= @p2 3)))))
 
@@ -232,14 +237,14 @@
   #?(:cljs
      (t/async done
        (let [e (ex-info "foobar" {})
-             p1 (future-fail 200 e)
+             p1 (future-fail 100 e)
              p2 (p/branch p1 (constantly nil) identity)]
          (p/then p2 #(do
                        (t/is (= % e))
                        (done)))))
      :clj
      (let [e (ex-info "foobar" {})
-           p1 (future-fail 200 e)
+           p1 (future-fail 100 e)
            p2 (p/branch p1 (constantly nil) (constantly 1))]
        (t/is (= @p2 1)))))
 
@@ -285,170 +290,97 @@
        :clj
        (t/is (= @p ::value)))))
 
+;; --- alet (async let) tests
 
 #?(:clj
    (t/deftest async-let
-     (let [result (p/alet [a (p/await (future-ok 100 1))
+     (let [result (p/alet [a (p/await (future-ok 50 1))
                            b 2
                            c 3
-                           d (p/await (future-ok 200 4))]
+                           d (p/await (future-ok 100 4))]
                     (+ a b c d))]
        (t/is (= @result 10)))))
 
 #?(:cljs
    (t/deftest async-let
      (t/async done
-       (let [result (p/alet [a (p/await (future-ok 100 1))
+       (let [result (p/alet [a (p/await (future-ok 50 1))
                              b 2
                              c 3
-                             d (p/await (future-ok 200 4))]
+                             d (p/await (future-ok 100 4))]
                       (+ a b c d))]
          (p/then result (fn [result]
                           (t/is (= result 10))
                           (done)))))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Cats Integration Tests
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+#?(:clj
+   (t/deftest async-let-await-binding
+     ;; Test for https://github.com/funcool/promesa/issues/36
+     (let [result (p/alet [x (agent {})
+                           _ (send-off x #(assoc % :done true))
+                           _ (clojure.core/await x)
+                           z (p/await (p/promise @x))]
+                          z)]
+       (t/is (= @result {:done true})))))
 
-#?(:cljs
-   (t/deftest extract-from-rejected-promise
-     (let [p1 (p/rejected 42)]
-       (t/is (p/rejected? p1))
-       (t/is (= (p/extract p1) 42)))))
+;; ;; --- Do Expression tests
 
-(t/deftest chaining-using-bind
-  #?(:cljs
-     (t/async done
-       (let [p1 (future-ok 200 2)
-             inc #(p/resolved (inc %))
-             p2 (m/>>= p1 inc inc inc)]
-         (p/then p2 (fn [v]
-                      (t/is (= v 5))
-                      (done)))))
-     :clj
-     (let [p1 (future-ok 200 2)
-           inc #(p/resolved (inc %))
-           p2 (m/>>= p1 inc inc inc)]
-       (t/is (= @p2 5)))))
+;; (t/deftest do-expression
+;;   #?(:cljs
+;;      (t/async done
+;;        (let [error (ex-info "foo" {})
+;;              result (p/do* (throw error))]
+;;          (p/catch result (fn [e]
+;;                            (t/is (= e error))
+;;                            (done)))))
+;;      :clj
+;;      (let [error (ex-info "foo" {})
+;;            result (p/do* (throw error))
+;;            result @(p/catch result (fn [e]
+;;                                      (assert (= e error))
+;;                                      nil))]
+;;        (t/is (= nil result)))))
 
-(t/deftest promise-as-functor
-  #?(:cljs
-     (t/async done
-       (let [rp (m/fmap inc (p/promise 2))]
-         (p/then rp (fn [v]
-                      (t/is (= v 3))
-                      (done)))))
 
-     :clj
-     (let [rp (m/fmap inc (p/promise 2))]
-       @(p/then rp (fn [v]
-                     (t/is (= v 3)))))))
+;; ;; --- `async` macro tests
 
-(t/deftest promise-as-bifunctor
-  #?(:cljs
-     (t/async done
-       (let [rp (m/bimap #(ex-info "Oh no" {}) inc (p/promise 2))]
-         (p/then rp (fn [v]
-                      (t/is (= v 3))
-                      (done)))))
+(defn my-func
+  [i]
+  (async
+    (loop [sum 0
+           c 0]
+      (if (< c i)
+        (do
+          (p/await (p/delay 10))
+          (recur (+ sum i) (inc c)))
+        sum))))
 
-     :clj
-     (let [rp (m/bimap #(ex-info "Oh no" {}) inc (p/promise 2))]
-       @(p/then rp (fn [v]
-                     (t/is (= v 3)))))))
 
-(t/deftest promise-as-applicative
-  #?(:cljs
-     (t/async done
-       (let [rp (m/fapply (p/resolved inc) (p/promise 2))]
-         (p/then rp (fn [v]
-                      (t/is (= v 3))
-                      (done)))))
-     :clj
-     (let [rp (m/fapply (p/resolved inc) (p/promise 2))]
-       @(p/then rp (fn [v]
-                     (t/is (= v 3)))))))
+(t/deftest async-macro
+  (letfn [(do-stuff [i]
+            (async
+              (loop [sum 0
+                     c 0]
+                (if (< c i)
+                  (do
+                    (p/await (p/delay 10))
+                    (recur (+ sum i) (inc c)))
+                  sum))))]
+    #?(:cljs
+       (t/async done
+         (p/then (do-stuff 10)
+                 (fn [result]
+                   (t/is (= 100 result))
+                   (done))))
+       :clj
+       (t/is (= 100 @(do-stuff 10))))))
 
-(t/deftest promise-as-monad
-  #?(:cljs
-     (t/async done
-       (let [p1 (m/>>= (p/promise 2) (fn [v] (m/return (inc v))))]
-         (p/then p1 (fn [v]
-                      (t/is (= v 3))
-                      (done)))))
-     :clj
-     (let [p1 (m/>>= (p/promise 2) (fn [v] (m/return (inc v))))]
-       @(p/then p1 (fn [v]
-                     (t/is (= v 3)))))))
-
-(t/deftest first-monad-law-left-identity
-  #?(:cljs
-     (t/async done
-       (let [p1 (m/pure pm/promise-context 4)
-             p2 (m/pure pm/promise-context 4)
-             vl  (m/>>= p2 #(m/pure pm/promise-context %))]
-         (p/then (p/all [p1 vl])
-                 (fn [[v1 v2]]
-                   (t/is (= v1 v2))
-                   (done)))))
-     :clj
-     (let [p1 (m/pure pm/promise-context 4)
-           p2 (m/pure pm/promise-context 4)
-           vl  (m/>>= p2 #(m/pure pm/promise-context %))]
-       @(p/then (p/all [p1 vl])
-                (fn [[v1 v2]]
-                  (t/is (= v1 v2)))))))
-
-(t/deftest second-monad-law-right-identity
-  #?(:cljs
-     (t/async done
-       (let [p1 (p/promise 3)
-             rs  (m/>>= (p/promise 3) m/return)]
-         (p/then (p/all [p1 rs])
-                 (fn [[v1 v2]]
-                   (t/is (= v1 v2))
-                   (done)))))
-     :clj
-     (let [p1 (p/promise 3)
-           rs  (m/>>= (p/promise 3) m/return)]
-       @(p/then (p/all [p1 rs])
-                (fn [[v1 v2]]
-                  (t/is (= v1 v2)))))))
-
-(t/deftest third-monad-law-associativity
-  #?(:cljs
-     (t/async done
-       (let [rs1 (m/>>= (m/mlet [x (p/promise 2)
-                                 y (p/promise (inc x))]
-                          (m/return y))
-                        (fn [y] (p/promise (inc y))))
-             rs2 (m/>>= (p/promise 2)
-                        (fn [x] (m/>>= (p/promise (inc x))
-                                       (fn [y] (p/promise (inc y))))))]
-         (p/then (p/all [rs1 rs2])
-                 (fn [[v1 v2]]
-                   (t/is (= v1 v2))
-                   (done)))))
-     :clj
-     (let [rs1 (m/>>= (m/mlet [x (p/promise 2)
-                               y (p/promise (inc x))]
-                        (m/return y))
-                      (fn [y]
-                        (p/promise (inc y))))
-           rs2 (m/>>= (p/promise 2)
-                      (fn [x] (m/>>= (p/promise (inc x))
-                                     (fn [y] (p/promise (inc y))))))
-           [v1 v2] @(p/all [rs1 rs2])]
-       (t/is (= v1 v2)))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Entry Point
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
+;; --- Entry Point
 
 #?(:cljs (enable-console-print!))
-#?(:cljs (set! *main-cli-fn* #(t/run-tests)))
+#?(:cljs (set! *main-cli-fn* #(t/run-tests
+                               'promesa.core-tests
+                               'promesa.issue-36)))
 #?(:cljs
    (defmethod t/report [:cljs.test/default :end-run-tests]
      [m]

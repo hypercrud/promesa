@@ -1,5 +1,87 @@
 # Changelog #
 
+## Version 1.8.1 ##
+
+Date: 2017-04-20
+
+- Remove `_` character from internal assets directory. That fixes incompatibilities
+  with cordova/android build tools.
+
+
+## Version 1.8.0 ##
+
+Date: 2017-02-21
+
+- Update bluebird to 3.4.7
+- Fix wrong impl of sync introspection (on cljs).
+- Fix wrong impl of delay function (on cljs).
+- Fix behavior difference of `then` function on clj in respect to cljs.
+- Avoid compiler warnings caused by .finally/.catch
+- Add safer await detection on `async` macro (on cljs).
+
+
+## Version 1.7.0 ##
+
+Date: 2016-12-18
+
+- Fix clojure `finally` implementation.
+- Minor internal refactor. Public api should be fully backward compatible.
+
+
+## Version 1.6.0 ##
+
+Date: 2016-11-02
+
+- Add `async` macro that uses `core.async` machinary in order to build `go`
+  like macro and allow to have fully async/await syntax.
+- Update bluebird to 3.4.6 (cljs underlying promise impl library).
+- Add support experimental support for native promises and other thenables.
+- Remove usage of `clj->js` and `js->clj` functions.
+
+
+## Version 1.5.0 ##
+
+Date: 2016-08-18
+
+- Make promise aware of clojure dynamic binding context (clj only).
+
+
+## Version 1.4.0 ##
+
+Date: 2016-07-10
+
+- Update bluebird to 3.4.1
+- Add missing Promise alias on externs (that fixes unexpected
+  exceptions on advanced compilation modes).
+
+
+## Version 1.3.1 ##
+
+Date: 2016-06-08
+
+- Remove reflection warnings.
+
+
+## Version 1.3.0 ##
+
+Date: 2016-06-08
+
+- Update bluebird to 3.4.0
+- Improve internal impl (now splitted in few namespaces).
+- Fix bug in `finally` combinator function.
+- Add `do*` promise constructor (analogous to `Promise.attempt`).
+- Remove `promise.monad` namespace.
+
+
+## Version 1.2.0 ##
+
+Date: 2016-05-20
+
+- Add more bluebird externs.
+- Docstrings improvements.
+- Update bluebird to 3.3.5
+
+
 ## Version 1.1.1 ##
 
 Date: 2016-03-19
